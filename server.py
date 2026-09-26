@@ -61,6 +61,8 @@ def default_data():
         {"id":"g1","name":"Clases Autoescuela","icon":"🎓","target":0,"pct":0},
         {"id":"g2","name":"PC Gamer","icon":"💻","target":0,"pct":0},
         {"id":"g3","name":"Entrada Primer Coche","icon":"🚗","target":0,"pct":0}],
+            "savingsMode":"goals",
+            "freeSavings":[],
       "fixedSnapshots":{},
       "futureExpenses":[],
     "privateData":{"pareja":[],"tarjeta":[],"tarjetaMeta":{"creditUsed":0,"limit":0}}
@@ -92,6 +94,8 @@ def clean_data(d):
       "transactions": d.get("transactions",[]) if isinstance(d.get("transactions",[]),list) else [],
       "fixed": d.get("fixed",base["fixed"]) if isinstance(d.get("fixed",base["fixed"]),list) else base["fixed"],
       "goals": d.get("goals",base["goals"]) if isinstance(d.get("goals",base["goals"]),list) else base["goals"],
+    "savingsMode": "free" if d.get("savingsMode") == "free" else "goals",
+    "freeSavings": d.get("freeSavings",base["freeSavings"]) if isinstance(d.get("freeSavings",base["freeSavings"]),list) else base["freeSavings"],
       "fixedSnapshots": d.get("fixedSnapshots",{}) if isinstance(d.get("fixedSnapshots",{}),dict) else {},
       "futureExpenses": d.get("futureExpenses",[]) if isinstance(d.get("futureExpenses",[]),list) else [],
       "privateData":{

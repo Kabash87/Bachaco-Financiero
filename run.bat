@@ -6,6 +6,8 @@ echo ========================================
 echo    EL BACHACO FINANCIERO v4.1
 echo ========================================
 echo.
+echo. Realizado por Kabash.
+echo.
 echo Servidor: http://localhost:3000
 echo.
 echo No cierres esta ventana mientras uses

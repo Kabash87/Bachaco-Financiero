@@ -231,15 +231,37 @@
           Number(privateData.tarjetaMeta.limit) || 0,
         );
 
-        // Compatibilidad con la versión anterior: todos los movimientos de tarjeta
-        // que no tenían tipo se consideran cargos.
-        privateData.tarjeta = privateData.tarjeta
+        const legacyMovements = privateData.tarjeta
           .map((t) => ({
             ...t,
             type: t.type === "pago" ? "pago" : "cargo",
             amount: Math.max(0, Number(t.amount) || 0),
           }))
           .filter((t) => t.amount > 0);
+        if (!Array.isArray(privateData.tarjetas)) {
+          privateData.tarjetas = [
+            {
+              id: "card-main",
+              name: "Tarjeta de crédito",
+              limit: Number(privateData.tarjetaMeta.limit) || 0,
+              creditUsed: Number(privateData.tarjetaMeta.creditUsed) || 0,
+              movements: legacyMovements,
+            },
+          ];
+        }
+        privateData.tarjetas = privateData.tarjetas.map((card, index) => ({
+          id: card.id || `card-${index + 1}`,
+          name: card.name || `Tarjeta ${index + 1}`,
+          limit: Math.max(0, Number(card.limit) || 0),
+          creditUsed: Math.max(0, Number(card.creditUsed) || 0),
+          movements: (Array.isArray(card.movements) ? card.movements : [])
+            .map((t) => ({
+              ...t,
+              type: t.type === "pago" ? "pago" : "cargo",
+              amount: Math.max(0, Number(t.amount) || 0),
+            }))
+            .filter((t) => t.amount > 0),
+        }));
 
         privateData.pareja = privateData.pareja
           .map((t) => ({
@@ -296,9 +318,16 @@
           freeSavingsForMonth(month).length > 0
         );
       }
-      function tarjetaChargesForMonth(month) {
+      function cardMovements(card) {
         normalizePrivateData();
-        return privateData.tarjeta
+        return card?.movements || [];
+      }
+      function tarjetaChargesForMonth(month, card) {
+        normalizePrivateData();
+        const movements = card
+          ? cardMovements(card)
+          : privateData.tarjetas.flatMap(cardMovements);
+        return movements
           .filter(
             (t) =>
               (t.date || "").slice(0, 7) === month &&
@@ -306,33 +335,40 @@
           )
           .reduce((s, t) => s + (Number(t.amount) || 0), 0);
       }
-      function tarjetaPaymentsForMonth(month) {
+      function tarjetaPaymentsForMonth(month, card) {
         normalizePrivateData();
-        return privateData.tarjeta
+        const movements = card
+          ? cardMovements(card)
+          : privateData.tarjetas.flatMap(cardMovements);
+        return movements
           .filter(
             (t) => (t.date || "").slice(0, 7) === month && t.type === "pago",
           )
           .reduce((s, t) => s + (Number(t.amount) || 0), 0);
       }
-      function tarjetaBalance() {
+      function tarjetaBalance(card) {
         normalizePrivateData();
-        const charges = privateData.tarjeta
+        const movements = card
+          ? cardMovements(card)
+          : privateData.tarjetas.flatMap(cardMovements);
+        const charges = movements
           .filter((t) => t.type === "cargo")
           .reduce((s, t) => s + (Number(t.amount) || 0), 0);
-        const payments = privateData.tarjeta
+        const payments = movements
           .filter((t) => t.type === "pago")
           .reduce((s, t) => s + (Number(t.amount) || 0), 0);
         return Math.max(
           0,
-          (Number(privateData.tarjetaMeta.creditUsed) || 0) +
+          (Number(card?.creditUsed ?? privateData.tarjetaMeta.creditUsed) ||
+            0) +
             charges -
             payments,
         );
       }
-      function tarjetaLimitInfo() {
+      function tarjetaLimitInfo(card) {
         normalizePrivateData();
-        const limit = Number(privateData.tarjetaMeta.limit) || 0;
-        const used = tarjetaBalance();
+        const limit = Number(card?.limit ?? privateData.tarjetaMeta.limit) || 0;
+        const used = tarjetaBalance(card);
         if (limit <= 0)
           return { limit: 0, used, pct: 0, over: 0, noLimit: true };
         return {
@@ -676,7 +712,9 @@
         );
         Object.keys(state.fixedSnapshots || {}).forEach((m) => set.add(m));
         privateData.pareja.forEach((t) => set.add(t.date.slice(0, 7)));
-        privateData.tarjeta.forEach((t) => set.add(t.date.slice(0, 7)));
+        privateData.tarjetas.forEach((card) =>
+          cardMovements(card).forEach((t) => set.add(t.date.slice(0, 7))),
+        );
         state.futureExpenses.forEach((f) => set.add(f.date.slice(0, 7)));
         state.freeSavings.forEach((item) => set.add(item.date.slice(0, 7)));
         set.add(currentMonth);
@@ -1232,18 +1270,9 @@
 
       function renderPrivado() {
         normalizePrivateData();
-        const card = tarjetaLimitInfo();
-        const cardPct = Math.max(0, Math.min(100, card.pct));
-        const cardClass =
-          card.over > 0 ? "bad" : card.pct >= 80 ? "warn" : "ok";
         const parejaList = privateData.pareja.filter(
           (x) => (x.date || "").slice(0, 7) === currentMonth,
         );
-        const tarjetaList = privateData.tarjeta.filter(
-          (x) => (x.date || "").slice(0, 7) === currentMonth,
-        );
-        const cardPayments = tarjetaPaymentsForMonth(currentMonth);
-        const cardCharges = tarjetaChargesForMonth(currentMonth);
 
         const parejaBlock = `
         <div class="private-section">
@@ -1267,34 +1296,36 @@
           }
         </div>`;
 
-        const cardStatus = card.noLimit
-          ? '<span class="card-limit-unlimited">Sin límite mensual</span>'
-          : `<span class="card-limit-status ${cardClass}">${card.pct.toFixed(0)}% utilizado${card.over > 0 ? ` · ${money(card.over)} por encima` : ""}</span>`;
-        const tarjetaBlock = `
-        <div class="private-section card-section">
-          <div class="private-heading"><div><div class="priv-sub-title">💳 Tarjeta de crédito</div><p class="sub">El <b>cargo</b> aumenta la deuda. El <b>pago</b> baja la deuda y, como sale dinero de tu cuenta, <b>sí cuenta como gasto</b> del mes.</p></div><button class="btn-ghost" id="card-limit-btn">⚙️ Límite mensual</button></div>
-          <div class="card-overview"><div class="card-stat"><span class="card-stat-label">Deuda actual</span><strong>${money(card.used)}</strong></div><div class="card-stat"><span class="card-stat-label">Límite mensual</span><strong>${card.noLimit ? "Sin límite" : money(card.limit)}</strong></div><div class="card-stat"><span class="card-stat-label">Pagado este mes</span><strong>${money(cardPayments)}</strong></div></div>
-          <div class="card-progress-wrap"><div class="card-progress-top"><span>Uso del límite</span>${cardStatus}</div><div class="card-progress"><div class="card-progress-fill ${cardClass}" style="width:${cardPct}%"></div></div>
-          ${card.noLimit ? '<p class="card-progress-note" data-action="open-limit-modal">Pon un límite mensual si quieres controlar cuánto de la tarjeta puedes utilizar.</p>' : card.over > 0 ? `<p class="card-progress-note danger">⚠️ Te has pasado ${money(card.over)} del límite de ${money(card.limit)}.</p>` : `<p class="card-progress-note">Te quedan ${money(Math.max(0, card.limit - card.used))} disponibles dentro del límite.</p>`}</div>
-          <div class="card-actions action-grid"><button class="btn-ghost" data-action="open-card-movement" data-card-type="cargo">➕ Registrar cargo</button><button class="btn-ghost" data-action="open-card-movement" data-card-type="pago">💶 Registrar pago</button></div>
-          <p class="card-progress-note">Cargos del mes: <b>${money(cardCharges)}</b> · Pagos del mes: <b>${money(cardPayments)}</b>. Solo los pagos afectan al gasto del mes.</p>
-          ${
-            tarjetaList.length === 0
-              ? '<p class="empty-note" style="margin-top:14px;">Sin movimientos de tarjeta este mes.</p>'
-              : `<ul class="mv-list" style="margin-top:10px;">${[...tarjetaList]
-                  .sort((a, b) => b.date.localeCompare(a.date))
-                  .map((t) => {
-                    const pago = t.type === "pago";
-                    return `<li class="mv-item"><span class="mv-icon">${pago ? "💶" : "💳"}</span><span class="mv-cat">${t.note || (pago ? "Pago de tarjeta" : "Cargo de tarjeta")}<span class="mv-tag ${pago ? "" : "pending"}">${pago ? "Pago" : "Cargo"}</span></span><span class="mv-date">${t.date.slice(5)}</span><span class="mv-amt ${pago ? "expense" : "income"}">${pago ? "-" : "+"}${money(t.amount)}</span><button class="del-btn" data-action="priv-del" data-key="tarjeta" data-id="${t.id}" title="Eliminar">✕</button></li>`;
-                  })
-                  .join("")}</ul>`
-          }
-        </div>`;
-        return `<section class="panel"><h2>❤️ Pareja y 💳 Tarjeta de crédito</h2><p class="sub">Apartados independientes, pero integrados en los gastos y estadísticas del mes.</p>${parejaBlock}<div class="private-divider"></div>${tarjetaBlock}</section>
+        const tarjetaBlocks = privateData.tarjetas
+          .map((card) => {
+            const info = tarjetaLimitInfo(card);
+            const pct = Math.max(0, Math.min(100, info.pct));
+            const cardClass =
+              info.over > 0 ? "bad" : info.pct >= 80 ? "warn" : "ok";
+            const movements = cardMovements(card).filter(
+              (x) => (x.date || "").slice(0, 7) === currentMonth,
+            );
+            const status = info.noLimit
+              ? "Sin límite"
+              : `${info.pct.toFixed(0)}% utilizado`;
+            const rows =
+              movements.length === 0
+                ? '<p class="empty-note" style="margin-top:14px;">Sin movimientos este mes.</p>'
+                : `<ul class="mv-list" style="margin-top:10px;">${[...movements]
+                    .sort((a, b) => b.date.localeCompare(a.date))
+                    .map((t) => {
+                      const pago = t.type === "pago";
+                      return `<li class="mv-item"><span class="mv-icon">${pago ? "💶" : "💳"}</span><span class="mv-cat">${t.note || (pago ? "Pago de tarjeta" : "Cargo de tarjeta")}</span><span class="mv-date">${t.date.slice(5)}</span><span class="mv-amt ${pago ? "expense" : "income"}">${pago ? "-" : "+"}${money(t.amount)}</span><button class="del-btn" data-action="del-card-movement" data-card-id="${card.id}" data-id="${t.id}">✕</button></li>`;
+                    })
+                    .join("")}</ul>`;
+            return `<div class="private-section card-section"><div class="private-heading"><div><div class="priv-sub-title">💳 ${card.name}</div><p class="sub">Los cargos aumentan la deuda y los pagos la reducen.</p></div><button class="del-btn" data-action="delete-card" data-card-id="${card.id}" title="Eliminar tarjeta">✕</button></div><div class="card-overview"><div class="card-stat"><span class="card-stat-label">Deuda actual</span><strong>${money(info.used)}</strong></div><div class="card-stat"><span class="card-stat-label">Límite</span><strong>${info.noLimit ? "Sin límite" : money(info.limit)}</strong></div><div class="card-stat"><span class="card-stat-label">Pagado este mes</span><strong>${money(tarjetaPaymentsForMonth(currentMonth, card))}</strong></div></div><div class="card-progress-wrap"><div class="card-progress-top"><span>Uso del límite</span><span class="card-limit-status ${cardClass}">${status}</span></div><div class="card-progress"><div class="card-progress-fill ${cardClass}" style="width:${pct}%"></div></div></div><div class="card-actions action-grid"><button class="btn-ghost" data-action="open-card-movement" data-card-id="${card.id}" data-card-type="cargo">➕ Registrar cargo</button><button class="btn-ghost" data-action="open-card-movement" data-card-id="${card.id}" data-card-type="pago">💶 Registrar pago</button></div><p class="card-progress-note">Cargos: <b>${money(tarjetaChargesForMonth(currentMonth, card))}</b> · Pagos: <b>${money(tarjetaPaymentsForMonth(currentMonth, card))}</b>.</p>${rows}</div>`;
+          })
+          .join("");
+        return `<section class="panel"><h2>❤️ Pareja y 💳 Tarjetas</h2><p class="sub">Apartados independientes, integrados en los gastos y estadísticas del mes.</p>${parejaBlock}<div class="private-divider"></div><div class="private-heading"><div><div class="priv-sub-title">💳 Tarjetas de crédito</div></div><button class="btn-primary" id="add-card-btn">➕ Añadir tarjeta</button></div>${tarjetaBlocks || '<p class="empty-note">No tienes tarjetas configuradas.</p>'}</section>
         <div class="modal-backdrop" id="pareja-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-pareja-modal">✕</button><h3>❤️ Agregar gasto de pareja</h3><p class="sub">Se guardará en la fecha indicada y se sumará al mes financiero correspondiente.</p><label>Importe</label><input type="number" id="pareja-modal-amount" step="0.01" min="0" placeholder="0.00"><label>Fecha</label><input type="date" id="pareja-modal-date" value="${todayStr()}"><label>Nota (opcional)</label><input type="text" id="pareja-modal-note" placeholder="Ej. Cena, regalo, viaje…"><div class="modal-actions"><button class="btn-ghost" data-action="close-pareja-modal">Cancelar</button><button class="btn-primary" id="save-pareja-modal">Guardar gasto</button></div></div></div>
-        <div class="modal-backdrop" id="card-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-card-modal">✕</button><h3>💳 Crédito usado</h3><p class="sub">Indica cuánto debes actualmente. Es la deuda de partida; los cargos la aumentan y los pagos la reducen.</p><label>Crédito usado actualmente</label><input type="number" id="card-credit-used-input" step="0.01" min="0" value="${card.used.toFixed(2)}" placeholder="0.00"><div class="modal-actions"><button class="btn-ghost" data-action="close-card-modal">Cancelar</button><button class="btn-primary" id="save-card-credit-used">Guardar</button></div></div></div>
-        <div class="modal-backdrop" id="card-movement-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-card-movement-modal">✕</button><h3 id="card-movement-modal-title">💳 Registrar movimiento</h3><p class="sub" id="card-movement-modal-help">Elige importe, fecha y una nota.</p><input type="hidden" id="card-movement-modal-type" value="cargo"><label>Importe</label><input type="number" id="card-movement-modal-amount" step="0.01" min="0" placeholder="0.00"><label>Fecha</label><input type="date" id="card-movement-modal-date" value="${todayStr()}"><label>Nota (opcional)</label><input type="text" id="card-movement-modal-note" placeholder="Detalle"><div class="modal-actions"><button class="btn-ghost" data-action="close-card-movement-modal">Cancelar</button><button class="btn-primary" id="save-card-movement-modal">Guardar movimiento</button></div></div></div>
-        <div class="modal-backdrop" id="limit-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-limit-modal">✕</button><h3>⚙️ Límite mensual de la tarjeta</h3><p class="sub">Pon 0 si no quieres utilizar ningún límite.</p><label>Límite mensual</label><input type="number" id="card-limit-input" step="0.01" min="0" value="${card.limit.toFixed(2)}" placeholder="0.00"><div class="modal-actions"><button class="btn-ghost" data-action="close-limit-modal">Cancelar</button><button class="btn-primary" id="save-card-limit">Guardar</button></div></div></div>`;
+        <div class="modal-backdrop" id="card-movement-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-card-movement-modal">✕</button><h3 id="card-movement-modal-title">💳 Registrar movimiento</h3><p class="sub" id="card-movement-modal-help">Elige importe, fecha y una nota.</p><input type="hidden" id="card-movement-modal-type" value="cargo"><input type="hidden" id="card-movement-modal-card"><label>Importe</label><input type="number" id="card-movement-modal-amount" step="0.01" min="0" placeholder="0.00"><label>Fecha</label><input type="date" id="card-movement-modal-date" value="${todayStr()}"><label>Nota (opcional)</label><input type="text" id="card-movement-modal-note" placeholder="Detalle"><div class="modal-actions"><button class="btn-ghost" data-action="close-card-movement-modal">Cancelar</button><button class="btn-primary" id="save-card-movement-modal">Guardar movimiento</button></div></div></div>
+        <div class="modal-backdrop" id="add-card-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-add-card-modal">✕</button><h3>💳 Añadir tarjeta</h3><p class="sub">Configura la tarjeta y, si quieres, registra la deuda inicial.</p><label>Nombre de la tarjeta</label><input type="text" id="new-card-name" placeholder="Ej. Visa principal"><label>Monto máximo</label><input type="number" id="new-card-limit" step="0.01" min="0" placeholder="0.00"><label>Monto usado al inicio (opcional)</label><input type="number" id="new-card-credit" step="0.01" min="0" placeholder="0.00"><div class="modal-actions"><button class="btn-ghost" data-action="close-add-card-modal">Cancelar</button><button class="btn-primary" id="save-new-card">Añadir tarjeta</button></div></div></div>
+        `;
       }
 
       function renderHistorial() {
@@ -1537,9 +1568,24 @@
           });
         });
         const catInput = document.getElementById("tx-category");
+        /*
+            const tarjetaBlocks = privateData.tarjetas.map((card) => {
+              const info = tarjetaLimitInfo(card);
+              const cardPct = Math.max(0, Math.min(100, info.pct));
+              const cardClass = info.over > 0 ? "bad" : info.pct >= 80 ? "warn" : "ok";
+              const movements = cardMovements(card).filter((x) => (x.date || "").slice(0, 7) === currentMonth);
+              const cardStatus = info.noLimit ? '<span class="card-limit-unlimited">Sin límite</span>' : `<span class="card-limit-status ${cardClass}">${info.pct.toFixed(0)}% utilizado${info.over > 0 ? ` · ${money(info.over)} por encima` : ""}</span>`;
+              return `<div class="private-section card-section"><div class="private-heading"><div><div class="priv-sub-title">💳 ${card.name}</div><p class="sub">Los cargos aumentan la deuda y los pagos la reducen.</p></div></div><div class="card-overview"><div class="card-stat"><span class="card-stat-label">Deuda actual</span><strong>${money(info.used)}</strong></div><div class="card-stat"><span class="card-stat-label">Límite</span><strong>${info.noLimit ? "Sin límite" : money(info.limit)}</strong></div><div class="card-stat"><span class="card-stat-label">Pagado este mes</span><strong>${money(tarjetaPaymentsForMonth(currentMonth, card))}</strong></div></div><div class="card-progress-wrap"><div class="card-progress-top"><span>Uso del límite</span>${cardStatus}</div><div class="card-progress"><div class="card-progress-fill ${cardClass}" style="width:${cardPct}%"></div></div></div><div class="card-actions action-grid"><button class="btn-ghost" data-action="open-card-movement" data-card-id="${card.id}" data-card-type="cargo">➕ Registrar cargo</button><button class="btn-ghost" data-action="open-card-movement" data-card-id="${card.id}" data-card-type="pago">💶 Registrar pago</button></div><p class="card-progress-note">Cargos: <b>${money(tarjetaChargesForMonth(currentMonth, card))}</b> · Pagos: <b>${money(tarjetaPaymentsForMonth(currentMonth, card))}</b>.</p>${movements.length === 0 ? '<p class="empty-note" style="margin-top:14px;">Sin movimientos este mes.</p>' : `<ul class="mv-list" style="margin-top:10px;">${[...movements].sort((a, b) => b.date.localeCompare(a.date)).map((t) => { const pago = t.type === "pago"; return `<li class="mv-item"><span class="mv-icon">${pago ? "💶" : "💳"}</span><span class="mv-cat">${t.note || (pago ? "Pago de tarjeta" : "Cargo de tarjeta")}</span><span class="mv-date">${t.date.slice(5)}</span><span class="mv-amt ${pago ? "expense" : "income"}">${pago ? "-" : "+"}${money(t.amount)}</span><button class="del-btn" data-action="del-card-movement" data-card-id="${card.id}" data-id="${t.id}">✕</button></li>`; }).join("")}</ul>`}</div>`;
+            }).join("");
+            return `<section class="panel"><h2>❤️ Pareja y 💳 Tarjetas</h2><p class="sub">Apartados independientes, integrados en los gastos y estadísticas del mes.</p>${parejaBlock}<div class="private-divider"></div><div class="private-heading"><div><div class="priv-sub-title">💳 Tarjetas de crédito</div></div><button class="btn-primary" id="add-card-btn">➕ Añadir tarjeta</button></div>${tarjetaBlocks || '<p class="empty-note">No tienes tarjetas configuradas.</p>'}</section>
+        */
         if (catInput)
           catInput.addEventListener("input", () => {
             const iconSel = document.getElementById("tx-icon");
+            /*
+            <div class="modal-backdrop" id="card-movement-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-card-movement-modal">✕</button><h3 id="card-movement-modal-title">💳 Registrar movimiento</h3><p class="sub" id="card-movement-modal-help">Elige importe, fecha y una nota.</p><input type="hidden" id="card-movement-modal-type" value="cargo"><input type="hidden" id="card-movement-modal-card"><label>Importe</label><input type="number" id="card-movement-modal-amount" step="0.01" min="0" placeholder="0.00"><label>Fecha</label><input type="date" id="card-movement-modal-date" value="${todayStr()}"><label>Nota (opcional)</label><input type="text" id="card-movement-modal-note" placeholder="Detalle"><div class="modal-actions"><button class="btn-ghost" data-action="close-card-movement-modal">Cancelar</button><button class="btn-primary" id="save-card-movement-modal">Guardar movimiento</button></div></div></div>
+            <div class="modal-backdrop" id="add-card-modal" hidden><div class="modal-card"><button class="modal-close" data-action="close-add-card-modal">✕</button><h3>💳 Añadir tarjeta</h3><p class="sub">Configura la tarjeta y, si quieres, registra la deuda inicial.</p><label>Nombre de la tarjeta</label><input type="text" id="new-card-name" placeholder="Ej. Visa principal"><label>Monto máximo</label><input type="number" id="new-card-limit" step="0.01" min="0" placeholder="0.00"><label>Monto usado al inicio (opcional)</label><input type="number" id="new-card-credit" step="0.01" min="0" placeholder="0.00"><div class="modal-actions"><button class="btn-ghost" data-action="close-add-card-modal">Cancelar</button><button class="btn-primary" id="save-new-card">Añadir tarjeta</button></div></div></div>
+            */
             if (iconSel && catInput.value.trim())
               iconSel.value = guessIcon(catInput.value);
           });
@@ -1870,6 +1916,8 @@
           .forEach((btn) => {
             btn.addEventListener("click", () => {
               const type = btn.dataset.cardType;
+              document.getElementById("card-movement-modal-card").value =
+                btn.dataset.cardId;
               document.getElementById("card-movement-modal-type").value = type;
               document.getElementById("card-movement-modal-title").textContent =
                 type === "pago"
@@ -1904,13 +1952,20 @@
             const note = document
               .getElementById("card-movement-modal-note")
               .value.trim();
+            const cardId = document.getElementById(
+              "card-movement-modal-card",
+            ).value;
+            const card = privateData.tarjetas.find(
+              (item) => item.id === cardId,
+            );
             if (!amount || amount <= 0 || !date)
               return alert("Indica un importe y una fecha válidos.");
-            if (type === "pago" && amount > tarjetaBalance())
+            if (!card) return alert("No se encontró la tarjeta seleccionada.");
+            if (type === "pago" && amount > tarjetaBalance(card))
               return alert(
-                `El pago (${money(amount)}) supera la deuda actual (${money(tarjetaBalance())}).`,
+                `El pago (${money(amount)}) supera la deuda actual (${money(tarjetaBalance(card))}).`,
               );
-            privateData.tarjeta.push({ id: uid(), amount, date, note, type });
+            card.movements.push({ id: uid(), amount, date, note, type });
             await savePrivate();
             currentMonth = date.slice(0, 7);
             sessionStorage.setItem("bachaco-month", currentMonth);
@@ -1919,33 +1974,76 @@
             render();
           });
 
-        const openLimitModal = () => {
-          const modal = document.getElementById("limit-modal");
-          if (modal) modal.hidden = false;
-        };
-        document
-          .querySelectorAll('#card-limit-btn,[data-action="open-limit-modal"]')
-          .forEach((el) => el.addEventListener("click", openLimitModal));
-
-        const saveCardLimitBtn = document.getElementById("save-card-limit");
-        if (saveCardLimitBtn)
-          saveCardLimitBtn.addEventListener("click", async () => {
-            const input = document.getElementById("card-limit-input");
-            const limit = parseFloat(input.value);
-            if (!Number.isFinite(limit) || limit < 0)
-              return alert("Indica un límite válido igual o mayor que 0.");
+        const addCardBtn = document.getElementById("add-card-btn");
+        if (addCardBtn)
+          addCardBtn.addEventListener("click", () => {
+            document.getElementById("add-card-modal").hidden = false;
+          });
+        const saveNewCardBtn = document.getElementById("save-new-card");
+        if (saveNewCardBtn)
+          saveNewCardBtn.addEventListener("click", async () => {
+            const name = document.getElementById("new-card-name").value.trim();
+            const limit =
+              parseFloat(document.getElementById("new-card-limit").value) || 0;
+            const creditUsed =
+              parseFloat(document.getElementById("new-card-credit").value) || 0;
+            if (!name) return alert("Indica un nombre para la tarjeta.");
+            if (limit < 0 || creditUsed < 0)
+              return alert("Los importes no pueden ser negativos.");
+            if (limit > 0 && creditUsed > limit)
+              return alert(
+                "El monto inicial no puede superar el monto máximo.",
+              );
             normalizePrivateData();
-            privateData.tarjetaMeta.limit = limit;
+            privateData.tarjetas.push({
+              id: uid(),
+              name,
+              limit,
+              creditUsed,
+              movements: [],
+            });
             await savePrivate();
-            document.getElementById("limit-modal").hidden = true;
             render();
           });
 
+        document
+          .querySelectorAll('[data-action="del-card-movement"]')
+          .forEach((el) => {
+            el.addEventListener("click", async () => {
+              normalizePrivateData();
+              const card = privateData.tarjetas.find(
+                (item) => item.id === el.dataset.cardId,
+              );
+              if (!card) return;
+              card.movements = card.movements.filter(
+                (x) => x.id !== el.dataset.id,
+              );
+              await savePrivate();
+              render();
+            });
+          });
+        document
+          .querySelectorAll('[data-action="delete-card"]')
+          .forEach((el) => {
+            el.addEventListener("click", async () => {
+              if (!confirm("¿Estas seguro? todo estos datos seran ELIMINADOS"))
+                return;
+              normalizePrivateData();
+              privateData.tarjetas = privateData.tarjetas.filter(
+                (card) => card.id !== el.dataset.cardId,
+              );
+              if (privateData.tarjetas.length === 0) {
+                privateData.tarjeta = [];
+                privateData.tarjetaMeta = { creditUsed: 0, limit: 0 };
+              }
+              await savePrivate();
+              render();
+            });
+          });
         document.querySelectorAll('[data-action="priv-del"]').forEach((el) => {
           el.addEventListener("click", async () => {
-            const key = el.dataset.key;
             normalizePrivateData();
-            privateData[key] = privateData[key].filter(
+            privateData.pareja = privateData.pareja.filter(
               (x) => x.id !== el.dataset.id,
             );
             await savePrivate();
@@ -1980,15 +2078,14 @@
 
         document
           .querySelectorAll(
-            '[data-action="close-pareja-modal"],[data-action="close-card-modal"],[data-action="close-card-movement-modal"],[data-action="close-limit-modal"]',
+            '[data-action="close-pareja-modal"],[data-action="close-card-movement-modal"],[data-action="close-add-card-modal"]',
           )
           .forEach((btn) => {
             btn.addEventListener("click", () => {
               const map = {
                 "close-pareja-modal": "pareja-modal",
-                "close-card-modal": "card-modal",
                 "close-card-movement-modal": "card-movement-modal",
-                "close-limit-modal": "limit-modal",
+                "close-add-card-modal": "add-card-modal",
               };
               const modal = document.getElementById(map[btn.dataset.action]);
               if (modal) modal.hidden = true;

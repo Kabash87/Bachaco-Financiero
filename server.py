@@ -48,6 +48,14 @@ def init_db():
                      (cur.lastrowid,json.dumps(default_data(),ensure_ascii=False)))
         conn.commit()
         print("Usuario inicial creado: Diego")
+    # Migrate existing JSON records to the current multi-card structure.
+    for saved in conn.execute("SELECT user_id,data FROM user_data").fetchall():
+        normalized = clean_data(json.loads(saved["data"]))
+        conn.execute(
+            "UPDATE user_data SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+            (json.dumps(normalized, ensure_ascii=False), saved["user_id"]),
+        )
+    conn.commit()
     conn.close()
 
 def default_data():
@@ -65,7 +73,7 @@ def default_data():
             "freeSavings":[],
       "fixedSnapshots":{},
       "futureExpenses":[],
-    "privateData":{"pareja":[],"tarjeta":[],"tarjetaMeta":{"creditUsed":0,"limit":0}}
+    "privateData":{"pareja":[],"tarjeta":[],"tarjetaMeta":{"creditUsed":0,"limit":0},"tarjetas":[]}
     }
 
 def make_password(password):
@@ -90,6 +98,18 @@ def clean_data(d):
     except (TypeError,ValueError): credit_used=0
     try: card_limit=max(0,float(meta.get("limit",0) or 0))
     except (TypeError,ValueError): card_limit=0
+    raw_cards = pd.get("tarjetas") if isinstance(pd,dict) else None
+    if not isinstance(raw_cards,list):
+        raw_cards = [{"id":"card-main","name":"Tarjeta de crédito","limit":card_limit,"creditUsed":credit_used,"movements":pd.get("tarjeta",[]) if isinstance(pd,dict) else []}]
+    cards=[]
+    for index, card in enumerate(raw_cards):
+        if not isinstance(card,dict): continue
+        try: limit=max(0,float(card.get("limit",0) or 0))
+        except (TypeError,ValueError): limit=0
+        try: used=max(0,float(card.get("creditUsed",0) or 0))
+        except (TypeError,ValueError): used=0
+        movements=card.get("movements",[]) if isinstance(card.get("movements",[]),list) else []
+        cards.append({"id":str(card.get("id") or f"card-{index+1}"),"name":str(card.get("name") or f"Tarjeta {index+1}"),"limit":limit,"creditUsed":used,"movements":movements})
     return {
       "transactions": d.get("transactions",[]) if isinstance(d.get("transactions",[]),list) else [],
       "fixed": d.get("fixed",base["fixed"]) if isinstance(d.get("fixed",base["fixed"]),list) else base["fixed"],
@@ -100,8 +120,9 @@ def clean_data(d):
       "futureExpenses": d.get("futureExpenses",[]) if isinstance(d.get("futureExpenses",[]),list) else [],
       "privateData":{
         "pareja":pd.get("pareja",[]) if isinstance(pd,dict) and isinstance(pd.get("pareja",[]),list) else [],
-                "tarjeta":pd.get("tarjeta",[]) if isinstance(pd,dict) and isinstance(pd.get("tarjeta",[]),list) else [],
-                "tarjetaMeta":{"creditUsed":credit_used,"limit":card_limit}
+                                "tarjeta":[],
+                                "tarjetaMeta":{"creditUsed":0,"limit":0},
+                                "tarjetas":cards
       }
     }
 

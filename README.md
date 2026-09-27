@@ -1,8 +1,4 @@
-## El Bachaco Financiero v4.1 corregida
-
-Esta versión corrige el cálculo de Dinero Corriente, Dinero Ahorro y Neto Real: el porcentaje de ahorro se aplica sobre el dinero que queda después de gastos. El Neto Real siempre es Corriente + Ahorro.
-
-# El Bachaco Financiero v4.1
+# El Bachaco Financiero v1
 
 Aplicación local de finanzas personales con Python + SQLite.
 
@@ -17,13 +13,14 @@ python server.py
 
 3. Abre `http://localhost:3000`.
 
-## Cambios de v4.1
+## Cambios de v1.2
 
-- Resumen inicial reorganizado en: Ingresos, Gastos, Dinero corriente (Ocio), Dinero ahorro, Neto real y Tasa de ahorro calculada.
-- El ahorro objetivo se aparta primero según la tasa configurada.
-- El gasto reduce primero el dinero corriente.
-- Cuando el dinero corriente pasa a negativo, el exceso empieza a consumir el ahorro apartado.
-- La tasa de ahorro se recalcula sobre el ahorro que realmente queda.
-- Dinero corriente, ahorro y neto real negativos se muestran en rojo.
-- `index.html` se sirve con `no-cache` para evitar que Chrome muestre versiones antiguas durante el desarrollo.
-- `run.bat` está dentro de la carpeta correcta, junto a `server.py`.
+- Se corrige el cálculo de Dinero Corriente, Dinero Ahorro y Neto Real: el porcentaje de ahorro se aplica sobre el dinero que queda después de gastos. El Neto Real siempre es Corriente + Ahorro.
+- Se ajusta el diseño de la interfaz para que sea más clara y fácil de usar. Dispositivos moviles
+- Se puede cambiar el tipo de ahorro, (Automatico o Manual) y el porcentaje de ahorro, en la sección de Ahorros.
+
+## Pendiente
+
+- Subirlo a internet para que sea accesible desde cualquier lugar.
+- Medidas de seguridad para proteger los datos de los usuarios.
+- Añadir espacio de Registro, dentro del usuario opcion de eliminar cuenta y datos
